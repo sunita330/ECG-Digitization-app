@@ -26,6 +26,18 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+def _download_model_if_missing():
+    if os.path.exists(MODEL_PATH):
+        return
+    url = os.environ.get('MODEL_DOWNLOAD_URL')
+    if not url:
+        return
+    import urllib.request
+    log.info(f"Downloading model from {url} ...")
+    urllib.request.urlretrieve(url, MODEL_PATH)
+    log.info("Model downloaded.")
+
+# Call it before load_unet() in __main__ and also at the top of load_unet()
 # ─────────────────────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────────────────────
@@ -95,7 +107,7 @@ class _DecoderBlock(nn.Module):
             )
         return self.conv(torch.cat([x, skip], dim=1))
 
-
+_download_model_if_missing()
 class UNet(nn.Module):
     def __init__(self, in_ch: int = 1, out_ch: int = 1):
         super().__init__()
@@ -595,6 +607,7 @@ def method_not_allowed(_):
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════
 if __name__ == '__main__':
+    _download_model_if_missing()
     log.info("=" * 60)
     log.info("  ECG Digitization System — Flask Backend")
     log.info("=" * 60)
