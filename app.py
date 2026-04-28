@@ -25,6 +25,7 @@ from torchvision import transforms
 from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask import send_from_directory
 
 def _download_model_if_missing():
     if os.path.exists(MODEL_PATH):
@@ -37,7 +38,7 @@ def _download_model_if_missing():
     urllib.request.urlretrieve(url, MODEL_PATH)
     log.info("Model downloaded.")
 
-# Call it before load_unet() in __main__ and also at the top of load_unet()
+
 # ─────────────────────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────────────────────
@@ -538,10 +539,13 @@ def run_pipeline(img_bgr:     np.ndarray,
 # ══════════════════════════════════════════════════════════════
 # FLASK ROUTES
 # ══════════════════════════════════════════════════════════════
-@app.route('/')
+@app.route("/")
 def serve_index():
-    return app.send_static_file('index.html')
+    return send_from_directory(".", "index.html")
 
+@app.route("/<path:path>")
+def serve_static(path):
+    return send_from_directory(".", path)
 
 @app.route('/process', methods=['POST'])
 def process():
@@ -616,5 +620,5 @@ if __name__ == '__main__':
     load_unet()
     log.info("  Server     : http://127.0.0.1:5000")
     log.info("=" * 60)
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host="0.0.0.0", port=port,debug=False, threaded=True)
