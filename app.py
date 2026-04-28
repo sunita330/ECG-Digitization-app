@@ -12,7 +12,6 @@ import time
 import base64
 import logging
 import traceback
-import requests
 
 import cv2
 import numpy as np
@@ -27,21 +26,6 @@ from PIL import Image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-
-def download_model():
-    url = "https://drive.google.com/uc?id=1-r_pKLKCmhdzfSquA-ia82N39WyY3AA6"
-    
-    if not os.path.exists(MODEL_PATH):
-        print("Downloading model...")
-
-        response = requests.get(url, stream=True)
-
-        with open(MODEL_PATH, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-
-        print("Model downloaded!")
 # ─────────────────────────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────────────────────────
@@ -56,7 +40,7 @@ log = logging.getLogger('ecg')
 # CONFIG
 # ─────────────────────────────────────────────────────────────
 BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH     = os.path.join(BASE_DIR, 'unet_ecg_best.pth')
+MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(BASE_DIR, 'unet_ecg_best.pth'))
 DEVICE         = 'cuda' if torch.cuda.is_available() else 'cpu'
 IMG_SIZE       = 256
 UNET_THRESHOLD = 0.5
@@ -66,11 +50,9 @@ VALID_MIMES    = {
     'image/bmp', 'image/tiff', 'image/webp'
 }
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+app = Flask(__name__, static_folder=BASE_DIR, static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = MAX_IMG_BYTES
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-from flask import Flask, render_template
+CORS(app, resources={r"/*": {"origins": os.environ.get('ALLOWED_ORIGINS', '*')}})
 
 # ══════════════════════════════════════════════════════════════
 # U-NET ARCHITECTURE
@@ -147,8 +129,8 @@ class UNet(nn.Module):
 _unet_model  = None
 _model_error = None
 
+
 def load_unet():
-    download_model()
     global _unet_model, _model_error
     if _unet_model is not None:
         return _unet_model
@@ -545,8 +527,9 @@ def run_pipeline(img_bgr:     np.ndarray,
 # FLASK ROUTES
 # ══════════════════════════════════════════════════════════════
 @app.route('/')
-def home():
-    return render_template("index.html")
+def serve_index():
+    return app.send_static_file('index.html')
+
 
 @app.route('/process', methods=['POST'])
 def process():
@@ -620,4 +603,5 @@ if __name__ == '__main__':
     load_unet()
     log.info("  Server     : http://127.0.0.1:5000")
     log.info("=" * 60)
-    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
