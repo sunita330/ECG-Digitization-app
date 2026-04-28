@@ -6,3 +6,4 @@ __pycache__/
 *.pth
 Data_subset/
 Output/
+Data_subset_masks/
