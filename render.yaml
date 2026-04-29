@@ -5,6 +5,9 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --keep-alive 5
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11"
+      - key: MODEL_DOWNLOAD_URL
+        value: "https://drive.google.com/uc?export=download&id=1-r_pKLKCmhdzfSquA-ia82N39WyY3AA6"   

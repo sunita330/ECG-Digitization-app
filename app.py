@@ -10,6 +10,7 @@ import time
 import base64
 import logging
 import traceback
+import threading
 
 import cv2
 import numpy as np
@@ -34,6 +35,9 @@ logging.basicConfig(
 )
 log = logging.getLogger('ecg')
 
+# Thread lock for matplotlib (prevents corruption on concurrent requests)
+_plt_lock = threading.Lock()
+
 # ─────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────
@@ -54,7 +58,6 @@ VALID_MIMES    = {
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = MAX_IMG_BYTES
 CORS(app, resources={r"/*": {"origins": "*"}})
-
 
 # ─────────────────────────────────────────────────────────────
 # MODEL DOWNLOAD (optional — only if MODEL_DOWNLOAD_URL is set)
@@ -117,15 +120,15 @@ class _DecoderBlock(nn.Module):
 class UNet(nn.Module):
     def __init__(self, in_ch=1, out_ch=1):
         super().__init__()
-        self.enc1 = _EncoderBlock(in_ch,  64)
-        self.enc2 = _EncoderBlock(64,    128)
-        self.enc3 = _EncoderBlock(128,   256)
-        self.enc4 = _EncoderBlock(256,   512)
-        self.btn  = _DoubleConv(512,    1024)
-        self.dec4 = _DecoderBlock(1024,  512)
-        self.dec3 = _DecoderBlock(512,   256)
-        self.dec2 = _DecoderBlock(256,   128)
-        self.dec1 = _DecoderBlock(128,    64)
+        self.enc1 = _EncoderBlock(in_ch,   64)
+        self.enc2 = _EncoderBlock(64,     128)
+        self.enc3 = _EncoderBlock(128,    256)
+        self.enc4 = _EncoderBlock(256,    512)
+        self.btn  = _DoubleConv(512,     1024)
+        self.dec4 = _DecoderBlock(1024,   512)
+        self.dec3 = _DecoderBlock(512,    256)
+        self.dec2 = _DecoderBlock(256,    128)
+        self.dec1 = _DecoderBlock(128,     64)
         self.out  = nn.Sequential(nn.Conv2d(64, out_ch, 1), nn.Sigmoid())
 
     def forward(self, x):
@@ -153,7 +156,6 @@ def load_unet():
     if _model_error is not None:
         return None
 
-    # Try downloading if URL is provided and file is missing
     _download_model_if_missing()
 
     if not os.path.exists(MODEL_PATH):
@@ -186,6 +188,14 @@ def load_unet():
         _model_error = str(exc)
         log.error(f"Failed to load U-Net: {exc}")
         return None
+
+
+# ── FIX #5: Eager load at startup — works under BOTH gunicorn and python app.py
+# load_unet() is defined above, so this call is safe.
+# Under gunicorn, this runs at import time (module level), before any request.
+# Under `python app.py`, it runs before app.run().
+# ─────────────────────────────────────────────────────────────
+load_unet()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -318,32 +328,34 @@ def _hr_zero_crossing(y, image_width):
 
 # ── Signal plot ───────────────────────────────────────────────
 def make_signal_plot(x, y, hr_label=""):
-    fig, ax = plt.subplots(figsize=(14, 4), facecolor='#0d1117')
-    ax.set_facecolor('#0d1117')
-    if len(x) > 0 and len(y) > 0:
-        ax.plot(x, y, color='#ff4f5e', linewidth=0.9, label='ECG Signal', alpha=0.92)
-    else:
-        ax.text(0.5, 0.5, 'No signal extracted', transform=ax.transAxes,
-                ha='center', va='center', color='#888', fontsize=12)
-    title = 'Extracted ECG Signal'
-    if hr_label and hr_label != 'N/A':
-        title += f'  |  HR ≈ {hr_label}'
-    ax.set_title(title, fontsize=13, fontweight='bold', color='#e8edf5', pad=10)
-    ax.set_xlabel('Time (pixels)', fontsize=10, color='#8899aa')
-    ax.set_ylabel('Amplitude (pixels)', fontsize=10, color='#8899aa')
-    ax.tick_params(colors='#8899aa', labelsize=9)
-    for sp in ax.spines.values():
-        sp.set_color('#2a3a4a')
-    ax.grid(True, linestyle='--', alpha=0.20, color='#aaaaaa')
-    if len(x) > 0:
-        ax.legend(loc='upper right', fontsize=9,
-                  facecolor='#1a2535', edgecolor='#2a3a4a', labelcolor='#c0d0e0')
-    fig.tight_layout(pad=1.5)
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#0d1117')
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
+    # FIX #7: lock wraps the ENTIRE function body, not just plt.subplots()
+    with _plt_lock:
+        fig, ax = plt.subplots(figsize=(14, 4), facecolor='#0d1117')
+        ax.set_facecolor('#0d1117')
+        if len(x) > 0 and len(y) > 0:
+            ax.plot(x, y, color='#ff4f5e', linewidth=0.9, label='ECG Signal', alpha=0.92)
+        else:
+            ax.text(0.5, 0.5, 'No signal extracted', transform=ax.transAxes,
+                    ha='center', va='center', color='#888', fontsize=12)
+        title = 'Extracted ECG Signal'
+        if hr_label and hr_label != 'N/A':
+            title += f'  |  HR ≈ {hr_label}'
+        ax.set_title(title, fontsize=13, fontweight='bold', color='#e8edf5', pad=10)
+        ax.set_xlabel('Time (pixels)', fontsize=10, color='#8899aa')
+        ax.set_ylabel('Amplitude (pixels)', fontsize=10, color='#8899aa')
+        ax.tick_params(colors='#8899aa', labelsize=9)
+        for sp in ax.spines.values():
+            sp.set_color('#2a3a4a')
+        ax.grid(True, linestyle='--', alpha=0.20, color='#aaaaaa')
+        if len(x) > 0:
+            ax.legend(loc='upper right', fontsize=9,
+                      facecolor='#1a2535', edgecolor='#2a3a4a', labelcolor='#c0d0e0')
+        fig.tight_layout(pad=1.5)
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='#0d1117')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
 
 
 # ── Encoding helpers ──────────────────────────────────────────
@@ -454,14 +466,17 @@ def serve_index():
     return send_from_directory(BASE_DIR, 'index.html')
 
 
+# Explicit safe filenames only — never serve config or model files
+_SAFE_STATIC = {'index.html', 'script.js', 'style.css', 'favicon.ico'}
+_SAFE_EXTS   = {'.css', '.js', '.ico', '.woff', '.woff2', '.ttf', '.svg'}
+
 @app.route('/<path:filename>')
 def serve_static(filename):
-    # Only serve known static file types — never let this shadow /process
-    allowed = {'.css', '.js', '.ico', '.png', '.jpg', '.svg', '.woff', '.woff2', '.ttf'}
+    if '..' in filename or filename.startswith('/'):
+        return jsonify({'error': 'Forbidden'}), 403
     ext = os.path.splitext(filename)[1].lower()
-    if ext in allowed:
+    if filename in _SAFE_STATIC or ext in _SAFE_EXTS:
         return send_from_directory(BASE_DIR, filename)
-    # For anything else (e.g. unknown paths) return 404
     return jsonify({'error': 'Not found'}), 404
 
 
@@ -538,7 +553,6 @@ if __name__ == '__main__':
     log.info("=" * 60)
     log.info(f"  Device     : {DEVICE.upper()}")
     log.info(f"  Model path : {MODEL_PATH}")
-    load_unet()
     port = int(os.environ.get('PORT', 5000))
     log.info(f"  Server     : http://0.0.0.0:{port}")
     log.info("=" * 60)

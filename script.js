@@ -220,13 +220,24 @@ async function processECG() {
   state.processing = true;
   showLoader();
 
-  let si = 0;
-  const tick = setInterval(() => {
-    if (si < PIPELINE_STAGES.length) {
-      const s = PIPELINE_STAGES[si++];
-      updateLoader(s.pct, s.msg);
-    }
-  }, 450);
+let si = 0;
+const warmupMsgs = [
+  'Server warming up — this takes ~30s on first use…',
+  'Still processing — please wait…',
+  'Almost there — server is busy…',
+  'Hang tight, running pipeline…',
+];
+let warmupIdx = 0;
+const tick = setInterval(() => {
+  if (si < PIPELINE_STAGES.length) {
+    const s = PIPELINE_STAGES[si++];
+    updateLoader(s.pct, s.msg);
+  } else {
+    // Keep showing reassuring messages instead of freezing
+    updateLoader(97, warmupMsgs[warmupIdx % warmupMsgs.length]);
+    warmupIdx++;
+  }
+}, 450);
 
   const fd = new FormData();
   fd.append('file',         state.file);
@@ -375,6 +386,14 @@ function updateLoader(pct, msg) {
 }
 
 
+fetch('/health').then(r => r.json()).then(data => {
+  if (!data.unet_loaded) {
+    const unetBtn = document.querySelector('[data-val="unet"]');
+    const hybridBtn = document.querySelector('[data-val="hybrid"]');
+    if (unetBtn)  unetBtn.title = 'U-Net model not loaded — will use Classical';
+    if (hybridBtn) hybridBtn.title = 'U-Net model not loaded — will use Classical';
+  }
+}).catch(() => {});
 /* ============================================================
    NOTIFICATION TOAST
    ============================================================ */
@@ -473,3 +492,7 @@ function downloadImage(src, filename) {
   a.click();
   document.body.removeChild(a);
 }
+
+(function prefetchHealth() {// pre-warms server on page load
+  fetch('/health').catch(() => {});  // fire and forget
+})();
