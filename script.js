@@ -1,5 +1,6 @@
 /* ============================================================
-   ECG DIGITIZATION SYSTEM — script.js  (Production-Ready)
+   ECG DIGITIZATION SYSTEM — script.js
+   Production build — uses relative /process endpoint
    ============================================================ */
 
 'use strict';
@@ -16,18 +17,23 @@ const state = {
 const $  = id  => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
 
-/* ── Flask endpoint ─────────────────────────────────────────── */
-const FLASK_URL = window.ECG_API_URL || 'http://127.0.0.1:5000/process';
+/*
+ * API endpoint — ALWAYS relative so it works on any host
+ * (local dev on port 5000, Render, any other deployment)
+ * Do NOT change this to an absolute URL.
+ */
+const FLASK_URL = '/process';
+
 /* ── Loader stage messages ──────────────────────────────────── */
 const PIPELINE_STAGES = [
-  { pct:  8, msg: 'Uploading image to server…'       },
-  { pct: 20, msg: 'Grayscale conversion…'            },
-  { pct: 35, msg: 'Applying Otsu threshold…'         },
-  { pct: 52, msg: 'Removing ECG grid lines…'         },
-  { pct: 68, msg: 'Enhancing waveform…'              },
-  { pct: 82, msg: 'Extracting signal coordinates…'   },
-  { pct: 93, msg: 'Calculating heart rate…'          },
-  { pct: 97, msg: 'Generating signal plot…'          },
+  { pct:  8, msg: 'Uploading image to server…'     },
+  { pct: 20, msg: 'Grayscale conversion…'          },
+  { pct: 35, msg: 'Applying Otsu threshold…'       },
+  { pct: 52, msg: 'Removing ECG grid lines…'       },
+  { pct: 68, msg: 'Enhancing waveform…'            },
+  { pct: 82, msg: 'Extracting signal coordinates…' },
+  { pct: 93, msg: 'Calculating heart rate…'        },
+  { pct: 97, msg: 'Generating signal plot…'        },
 ];
 
 
@@ -44,7 +50,6 @@ const PIPELINE_STAGES = [
     canvas.height = window.innerHeight;
     draw();
   }
-
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = 'rgba(0,229,255,0.04)';
@@ -56,7 +61,6 @@ const PIPELINE_STAGES = [
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
     }
   }
-
   window.addEventListener('resize', resize);
   resize();
 })();
@@ -111,10 +115,10 @@ const PIPELINE_STAGES = [
    ============================================================ */
 (function initSliders() {
   [
-    { id: 'hKernel',    valId: 'hKernelVal',   key: 'hKernel',     sfx: 'px' },
-    { id: 'vKernel',    valId: 'vKernelVal',   key: 'vKernel',     sfx: 'px' },
-    { id: 'dilate',     valId: 'dilateVal',    key: 'dilate',      sfx: ''   },
-    { id: 'closeKernel',valId: 'closeVal',     key: 'closeKernel', sfx: 'px' },
+    { id: 'hKernel',     valId: 'hKernelVal', key: 'hKernel',     sfx: 'px' },
+    { id: 'vKernel',     valId: 'vKernelVal', key: 'vKernel',     sfx: 'px' },
+    { id: 'dilate',      valId: 'dilateVal',  key: 'dilate',      sfx: ''   },
+    { id: 'closeKernel', valId: 'closeVal',   key: 'closeKernel', sfx: 'px' },
   ].forEach(({ id, valId, key, sfx }) => {
     const inp = $(id);
     const out = $(valId);
@@ -204,7 +208,7 @@ clearBtn.addEventListener('click', () => {
 
 
 /* ============================================================
-   PROCESS BUTTON → Flask
+   PROCESS BUTTON
    ============================================================ */
 $('processBtn').addEventListener('click', async () => {
   if (!state.file)      { showNotification('No image selected.', 'error'); return; }
@@ -216,7 +220,6 @@ async function processECG() {
   state.processing = true;
   showLoader();
 
-  /* Animate stage messages while the server works */
   let si = 0;
   const tick = setInterval(() => {
     if (si < PIPELINE_STAGES.length) {
@@ -234,15 +237,22 @@ async function processECG() {
   fd.append('close_kernel', state.params.closeKernel);
 
   try {
-    updateLoader(3, 'Connecting to Flask server…');
+    updateLoader(3, 'Sending to server…');
 
-    const res = await fetch(FLASK_URL, { method: 'POST', body: fd });
+    const res = await fetch(FLASK_URL, {
+      method: 'POST',
+      body:   fd,
+      // No Content-Type header — browser sets it with boundary for FormData
+    });
 
     clearInterval(tick);
 
     if (!res.ok) {
       let msg = `Server error ${res.status}`;
-      try { const j = await res.json(); msg = j.error || msg; } catch (_) {}
+      try {
+        const j = await res.json();
+        msg = j.error || msg;
+      } catch (_) {}
       throw new Error(msg);
     }
 
@@ -257,13 +267,17 @@ async function processECG() {
     clearInterval(tick);
     hideLoader();
 
-    const isNetwork = err instanceof TypeError;
-    showNotification(
-      isNetwork
-        ? 'Cannot reach Flask server — make sure app.py is running on port 5000.'
-        : err.message,
-      'error'
-    );
+    // Provide a helpful error for the two most common failure modes
+    let userMsg = err.message;
+    if (err instanceof TypeError && err.message.toLowerCase().includes('fetch')) {
+      userMsg = 'Network error — the server could not be reached. '
+              + 'If running locally, make sure app.py is running.';
+    } else if (err.message.includes('502') || err.message.includes('503')) {
+      userMsg = 'Server is starting up (cold start). '
+              + 'Wait 30 seconds and try again.';
+    }
+
+    showNotification(userMsg, 'error');
     console.error('[ECG]', err);
   }
 
@@ -277,7 +291,6 @@ async function processECG() {
 function populateResults(data) {
   hideLoader();
 
-  /* Stage images */
   const stageMap = {
     grayscale: 'img-grayscale',
     binary:    'img-binary',
@@ -298,7 +311,6 @@ function populateResults(data) {
     };
   });
 
-  /* Signal plot */
   if (data.signal_plot) {
     const sig = $('img-signal');
     if (sig) {
@@ -313,19 +325,17 @@ function populateResults(data) {
     if (dl) dl.onclick = () => downloadImage(data.signal_plot, 'ecg_signal.png');
   }
 
-  /* Metrics */
   if (data.metrics) {
     _setMetric('m-points', data.metrics.points);
     _setMetric('m-hr',     data.metrics.hr);
     _setMetric('m-time',   data.metrics.time_ms);
 
-    /* Rename "Dice Score" label → "Coverage" and show coverage % */
-    const diceLabel = document.querySelector('[for="m-dice"], .metric:has(#m-dice) .metric-label');
+    // Rename "Dice Score" label to "Coverage"
+    const diceLabel = document.querySelector('.metric:has(#m-dice) .metric-label');
     if (diceLabel) diceLabel.textContent = 'Coverage';
     _setMetric('m-dice', data.metrics.dice);
   }
 
-  /* Mode badge (optional — shows which pipeline ran) */
   if (data.meta?.mode) {
     const badge = document.querySelector('.hero-badge');
     if (badge) {
@@ -354,16 +364,14 @@ function showLoader() {
   $('loaderOverlay')?.classList.add('active');
   updateLoader(3, 'Initialising pipeline…');
 }
-
 function hideLoader() {
   $('loaderOverlay')?.classList.remove('active');
 }
-
 function updateLoader(pct, msg) {
   const fill = $('loaderFill');
   const stat = $('loaderStatus');
-  if (fill) fill.style.width   = `${pct}%`;
-  if (stat) stat.textContent   = msg;
+  if (fill) fill.style.width = `${pct}%`;
+  if (stat) stat.textContent = msg;
 }
 
 
@@ -384,38 +392,37 @@ function showNotification(msg, type = 'info') {
   toast.className = 'toast';
   toast.innerHTML = `<span class="toast-icon">${p.icon}</span>${msg}`;
   Object.assign(toast.style, {
-    position:       'fixed',
-    bottom:         '32px',
-    right:          '32px',
-    zIndex:         '9999',
-    display:        'flex',
-    alignItems:     'center',
-    gap:            '10px',
-    padding:        '14px 20px',
-    borderRadius:   '12px',
-    background:     p.bg,
-    border:         `1px solid ${p.border}`,
-    backdropFilter: 'blur(20px)',
+    position:             'fixed',
+    bottom:               '32px',
+    right:                '32px',
+    zIndex:               '9999',
+    display:              'flex',
+    alignItems:           'center',
+    gap:                  '10px',
+    padding:              '14px 20px',
+    borderRadius:         '12px',
+    background:           p.bg,
+    border:               `1px solid ${p.border}`,
+    backdropFilter:       'blur(20px)',
     WebkitBackdropFilter: 'blur(20px)',
-    color:          '#e8edf5',
-    fontFamily:     "'Cabinet Grotesk', sans-serif",
-    fontSize:       '.9rem',
-    boxShadow:      '0 8px 32px rgba(0,0,0,.4)',
-    animation:      'toastIn .3s ease both',
-    maxWidth:       '440px',
-    lineHeight:     '1.45',
+    color:                '#e8edf5',
+    fontFamily:           "'Cabinet Grotesk', sans-serif",
+    fontSize:             '.9rem',
+    boxShadow:            '0 8px 32px rgba(0,0,0,.4)',
+    animation:            'toastIn .3s ease both',
+    maxWidth:             '440px',
+    lineHeight:           '1.45',
   });
 
   if (!document.getElementById('__toast_styles')) {
     const s = document.createElement('style');
     s.id = '__toast_styles';
     s.textContent = `
-      @keyframes toastIn  { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
-      @keyframes toastOut { from { opacity:1; transform:translateY(0); } to { opacity:0; transform:translateY(14px); } }
+      @keyframes toastIn  { from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);} }
+      @keyframes toastOut { from{opacity:1;transform:translateY(0);}to{opacity:0;transform:translateY(14px);} }
     `;
     document.head.appendChild(s);
   }
-
   document.body.appendChild(toast);
 
   setTimeout(() => {
@@ -447,7 +454,7 @@ function showNotification(msg, type = 'info') {
   if (!document.getElementById('__nav_styles')) {
     const s = document.createElement('style');
     s.id = '__nav_styles';
-    s.textContent = `.nav-link.active-link { color: #e8edf5; background: rgba(0,229,255,0.08); }`;
+    s.textContent = `.nav-link.active-link{color:#e8edf5;background:rgba(0,229,255,.08);}`;
     document.head.appendChild(s);
   }
 })();
@@ -459,7 +466,7 @@ function showNotification(msg, type = 'info') {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function downloadImage(src, filename) {
-  const a    = document.createElement('a');
+  const a = document.createElement('a');
   a.href     = src;
   a.download = filename;
   document.body.appendChild(a);
