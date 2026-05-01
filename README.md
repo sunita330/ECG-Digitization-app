@@ -5,9 +5,10 @@ Convert ECG images into clean digital signals using image processing + deep lear
 ---
 
 ## 🚀 Live Demo
+https://ecg-digitization-app-yxn6.onrender.com
 
-https://ecg-digitization-project.onrender.com
-https://ecg-digitization-app-yxn6.onrender.com/
+## unet_ecg_best.pth 
+https://drive.google.com/file/d/1-r_pKLKCmhdzfSquA-ia82N39WyY3AA6/view?usp=drive_link
 ---
 
 ## ✨ Features
